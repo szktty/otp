@@ -500,12 +500,12 @@ get_supervised_procs() ->
       get_application_names()).
 
 get_supervised_procs(_, Root, Procs, {ok, SupMod}) ->
-    get_procs(maybe_supervisor_which_children(SupMod, Root), Root) ++
+    get_procs(maybe_supervisor_which_children(get_proc_state(Root), SupMod, Root), Root) ++
         [{undefined, undefined, Root, [SupMod]} |  Procs];
 get_supervised_procs(Application, Root, Procs, {error, _}) ->
     error_logger:error_msg("release_handler: cannot find top supervisor for "
                            "application ~w~n", [Application]),
-    get_procs(maybe_supervisor_which_children(Application, Root), Root) ++ Procs.
+    get_procs(maybe_supervisor_which_children(get_proc_state(Root), Application, Root), Root) ++ Procs.
 
 get_application_names() ->
     lists:map(fun({Application, _Name, _Vsn}) ->
@@ -526,33 +526,43 @@ get_procs([{Name, Pid, worker, Mods} | T], Sup) when is_pid(Pid), is_list(Mods) 
     [{Sup, Name, Pid, Mods} | get_procs(T, Sup)];
 get_procs([{Name, Pid, supervisor, Mods} | T], Sup) when is_pid(Pid) ->
     [{Sup, Name, Pid, Mods} | get_procs(T, Sup)] ++
-        get_procs(maybe_supervisor_which_children(Name, Pid), Pid);
+        get_procs(maybe_supervisor_which_children(get_proc_state(Pid), Name, Pid), Pid);
 get_procs([_H | T], Sup) ->
     get_procs(T, Sup);
 get_procs(_, _Sup) ->
     [].
 
-maybe_supervisor_which_children(Name, Pid) ->
+get_proc_state(Proc) ->
+    {status, _, {module, _}, [_, State, _, _, _]} = sys:get_status(Proc),
+    State.
+
+maybe_supervisor_which_children(suspended, Name, Pid) ->
+    error_logger:error_msg("release_handler: a which_children call"
+                           " to ~p (~p) was avoided. This supervisor"
+                           " is suspended and should likely be upgraded"
+                           " differently, skipping it.~n", [Name, Pid]),
+    [];
+maybe_supervisor_which_children(_, Name, Pid) ->
     case catch supervisor:which_children(Pid) of
         Res when is_list(Res) ->
             Res;
         Other ->
-            error_logger:error_msg("release_handler: ~p~ncalling which_children"
-                                   " to ~p (~p), this supervisor is should likely"
-                                   "  be upgraded differently.~n",
+            error_logger:error_msg("release_handler: ~p~nerror during"
+                                   " a which_children call to ~p (~p) .~n",
                                    [Other, Name, Pid]),
             []
     end.
-
 
 maybe_get_dynamic_mods(Name, Pid) ->
     case catch gen:call(Pid, self(), get_modules) of
         {ok, Res} ->
             Res;
         Other ->
-            error_logger:error_msg("release_handler: ~p~ncalling get_modules"
-                                   " to ~p (~p), there may be an error in it's"
-                                   " childspec.~n", [Other, Name, Pid]),
+            error_logger:error_msg("release_handler: ~p~nerror during a"
+                                   " get_modules call to ~p (~p),"
+                                   " there may be an error in it's"
+                                   " childspec, skipping it.~n",
+                                   [Other, Name, Pid]),
             []
     end.
 
