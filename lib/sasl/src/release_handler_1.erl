@@ -500,12 +500,12 @@ get_supervised_procs() ->
       get_application_names()).
 
 get_supervised_procs(_, Root, Procs, {ok, SupMod}) ->
-    get_procs(maybe_supervisor_which_children(get_proc_state(Root), Root), Root) ++
+    get_procs(maybe_supervisor_which_children(SupMod, Root), Root) ++
         [{undefined, undefined, Root, [SupMod]} |  Procs];
 get_supervised_procs(Application, Root, Procs, {error, _}) ->
     error_logger:error_msg("release_handler: cannot find top supervisor for "
                            "application ~w~n", [Application]),
-    get_procs(maybe_supervisor_which_children(get_proc_state(Root), Root), Root) ++ Procs.
+    get_procs(maybe_supervisor_which_children(Application, Root), Root) ++ Procs.
 
 get_application_names() ->
     lists:map(fun({Application, _Name, _Vsn}) ->
@@ -520,43 +520,41 @@ get_master_procs(_, Procs, _) ->
     Procs.
 
 get_procs([{Name, Pid, worker, dynamic} | T], Sup) when is_pid(Pid) ->
-    Mods = maybe_get_dynamic_mods(get_proc_initial_call_mod(Pid), Pid),
+    Mods = maybe_get_dynamic_mods(Name, Pid),
     [{Sup, Name, Pid, Mods} | get_procs(T, Sup)];
 get_procs([{Name, Pid, worker, Mods} | T], Sup) when is_pid(Pid), is_list(Mods) ->
     [{Sup, Name, Pid, Mods} | get_procs(T, Sup)];
 get_procs([{Name, Pid, supervisor, Mods} | T], Sup) when is_pid(Pid) ->
     [{Sup, Name, Pid, Mods} | get_procs(T, Sup)] ++
-        get_procs(maybe_supervisor_which_children(get_proc_state(Pid), Pid), Pid);
+        get_procs(maybe_supervisor_which_children(Name, Pid), Pid);
 get_procs([_H | T], Sup) ->
     get_procs(T, Sup);
 get_procs(_, _Sup) ->
     [].
 
-get_proc_state(Proc) ->
-    {status, _, {module, _}, [_, State, _, _, _]} = sys:get_status(Proc),
-    State.
+maybe_supervisor_which_children(Name, Pid) ->
+    case catch supervisor:which_children(Pid) of
+        Res when is_list(Res) ->
+            Res;
+        Other ->
+            error_logger:error_msg("release_handler: ~p~ncalling which_children"
+                                   " to ~p (~p), this supervisor is should likely"
+                                   "  be upgraded differently.~n",
+                                   [Other, Name, Pid]),
+            []
+    end.
 
-get_proc_initial_call_mod(Proc) ->
-    {status, _, {module, _}, [List, _, _, _, _]} = sys:get_status(Proc),
-    {Mod, _, _} = proplists:get_value('$initial_call', List),
-    Mod.
 
-maybe_supervisor_which_children(suspended, Pid) ->
-    error_logger:error_msg("release_handler: supervisor ~p is suspended,"
-                           " cannot query children~n", [Pid]),
-    [];
-maybe_supervisor_which_children(_, Pid) ->
-    supervisor:which_children(Pid).
-
-maybe_get_dynamic_mods(supervisor, Pid) ->
-    error_logger:error_msg("release_handler: ~p is a supervisor"
-                           " but is specified as a worker,"
-                           " there is likely an issue with your"
-                           " childspec~n", [Pid]),
-    [];
-maybe_get_dynamic_mods(_, Pid) ->
-    {ok,Res} = gen:call(Pid, self(), get_modules),
-    Res.
+maybe_get_dynamic_mods(Name, Pid) ->
+    case catch gen:call(Pid, self(), get_modules) of
+        {ok, Res} ->
+            Res;
+        Other ->
+            error_logger:error_msg("release_handler: ~p~ncalling get_modules"
+                                   " to ~p (~p), there may be an error in it's"
+                                   " childspec.~n", [Other, Name, Pid]),
+            []
+    end.
 
 %% XXXX
 %% Note: The following is a terrible hack done in order to resolve the
