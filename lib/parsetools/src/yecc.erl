@@ -422,7 +422,7 @@ infile(Parent, Infilex, Options) ->
 
 werror(St) ->
     member(warnings_as_errors, St#yecc.options)
-        andalso length(St#yecc.warnings) > 0.
+        andalso St#yecc.warnings =/= [].
 
 outfile(St0) ->
     case file:open(St0#yecc.outfile, [write, delayed_write]) of
