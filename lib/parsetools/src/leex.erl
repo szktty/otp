@@ -283,7 +283,7 @@ do_error_return(St, Es, Ws) ->
 
 werror(St) ->
     member(warnings_as_errors, St#leex.opts)
-        andalso length(St#leex.warnings) > 0.
+        andalso St#leex.warnings =/= [].
 
 pack_errors([{File,_} | _] = Es) ->
     [{File, flatmap(fun({_,E}) -> [E] end, sort(Es))}];
